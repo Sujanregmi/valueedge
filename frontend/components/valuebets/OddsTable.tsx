@@ -1,5 +1,4 @@
 type Bet = {
-  
   sport: string;
   event: string;
   selection: string;
