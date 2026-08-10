@@ -99,21 +99,81 @@ class MatcherService:
         return MatcherService.similarity(odds_name, runner_name) >= threshold
 
     @staticmethod
-    def find_matching_event(odds_event_name, betfair_events):
+    def find_matching_event(
+        odds_event_name,
+        betfair_events,
+        threshold: float = 0.55,
+        debug: bool = False,
+    ):
+        odds_name = MatcherService.normalize(odds_event_name)
+        odds_teams = MatcherService._split_teams(odds_name)
+
         best_match = None
         best_score = 0.0
+        candidates = []
 
         for event in betfair_events:
             betfair_name = event.event.name
+            normalized_betfair = MatcherService.normalize(betfair_name)
+            betfair_teams = MatcherService._split_teams(normalized_betfair)
 
-            if MatcherService.events_match(odds_event_name, betfair_name):
+            score = 0.0
+
+            if odds_teams and betfair_teams:
+                o1, o2 = odds_teams
+                b1, b2 = betfair_teams
+
+                straight_1 = MatcherService.similarity(o1, b1)
+                straight_2 = MatcherService.similarity(o2, b2)
+
+                swapped_1 = MatcherService.similarity(o1, b2)
+                swapped_2 = MatcherService.similarity(o2, b1)
+
+                # Both teams must match.
+                # The weaker team determines the pair score.
+                straight_score = min(straight_1, straight_2)
+                swapped_score = min(swapped_1, swapped_2)
+
+                score = max(straight_score, swapped_score)
+
+            else:
                 score = MatcherService.similarity(
-                    MatcherService.normalize(odds_event_name),
-                    MatcherService.normalize(betfair_name),
+                    odds_name,
+                    normalized_betfair,
                 )
-                if score > best_score:
-                    best_score = score
-                    best_match = event
+
+            candidates.append(
+                (score, betfair_name)
+            )
+
+            if score >= threshold and score > best_score:
+                best_score = score
+                best_match = event
+
+        if debug:
+            candidates.sort(
+                key=lambda item: item[0],
+                reverse=True,
+            )
+
+            print(f"\nMatcher debug for: {odds_event_name}")
+
+            for score, name in candidates[:5]:
+                print(
+                    f"  {score:.2f} | {name}"
+                )
+
+            if best_match:
+                print(
+                    f"Selected match: "
+                    f"{best_match.event.name} "
+                    f"({best_score:.2f})"
+                )
+            else:
+                print(
+                    f"No match reached threshold "
+                    f"{threshold:.2f}"
+                )
 
         return best_match
 

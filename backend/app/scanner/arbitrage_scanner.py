@@ -118,8 +118,9 @@ def scan_for_arbitrage(
 
     print(f"\nScanning {len(all_events)} events...\n")
 
-    for odds_event in all_events:
+    for index, odds_event in enumerate(all_events, start=1):
 
+        print(f"\nProcessing event {index}/{len(all_events)}")
         sport_key = odds_event.get("sport_key")
         event_type_id = SPORT_KEY_TO_EVENT_TYPE.get(sport_key)
 
@@ -137,11 +138,16 @@ def scan_for_arbitrage(
 
         try:
 
+            print("Fetching Betfair events...")
+
             betfair_events = betfair.get_events(event_type_id)
+
+            print(f"Betfair returned {len(betfair_events)} events")
 
             matched_event = MatcherService.find_matching_event(
                 event_name,
                 betfair_events,
+                debug=True,
             )
 
             if not matched_event:
@@ -183,8 +189,7 @@ def scan_for_arbitrage(
     f"Back: {back_info['odds']} ({back_info['bookmaker']}) | "
     f"Lay: {lay_odds}"
 )
-                result = find_back_lay_arbitrage(...)
-                print(result)
+                
 
                 if lay_odds is None:
                     continue
