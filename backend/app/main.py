@@ -1,7 +1,7 @@
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
-
+from app.models import ArbitrageOpportunity
 from .database import engine, Base, SessionLocal
 from . import models
 from .schemas import UserCreate, UserResponse, LoginRequest, Token
@@ -11,16 +11,38 @@ from .routers import bets
 from .routers import bankroll
 from .routers import odds
 from .routers import valuebets
-
+from contextlib import asynccontextmanager
 # Create database tables
+from fastapi import FastAPI
 Base.metadata.create_all(bind=engine)
+from app.routers.valuebets import (
+    start_automatic_scanner,
+)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+
+    print("Starting EdgePulse...")
+
+    start_automatic_scanner()
+
+    yield
+
+    print("Stopping EdgePulse...")
+
 
 
 app = FastAPI(
     title="EdgePulse API",
     description="Betting analytics backend",
-    version="1.0"
+    version="1.0",
+    lifespan=lifespan,
 )
+
+app.include_router(valuebets.router)
+
+
+
+
 app.include_router(
     bookmakers.router
 )
@@ -40,10 +62,12 @@ app.include_router(
 
 app.add_middleware(
     CORSMiddleware,
-   allow_origins=[
-    "http://localhost:3000",
-    "http://localhost:3001"
-],
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+        "http://127.0.0.1:3001",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

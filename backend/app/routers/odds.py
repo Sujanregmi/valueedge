@@ -1,15 +1,23 @@
 from fastapi import APIRouter
 
-from ..services.odds_service import get_odds
+from ..services.odds_service import get_soccer_events
 
 
 router = APIRouter(
     prefix="/odds",
-    tags=["Odds"]
+    tags=["Odds"],
 )
 
 
 @router.get("/")
-def odds():
+def get_odds_endpoint(
+    limit: int = 100,
+):
+    events = get_soccer_events(
+        limit=limit
+    )
 
-    return get_odds()
+    return {
+        "count": len(events),
+        "events": events,
+    }
