@@ -2,116 +2,98 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 
+import { useAuth } from "@/lib/AuthContext";
 
 export default function LoginPage() {
-
+  const { login } = useAuth();
   const router = useRouter();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
-
-  async function handleLogin(e: React.FormEvent) {
-
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setError(null);
+    setSubmitting(true);
 
+    const result = await login(email, password);
 
-    const response = await fetch(
-      "http://localhost:8000/login",
-      {
-        method: "POST",
+    setSubmitting(false);
 
-        headers: {
-          "Content-Type": "application/json",
-        },
-
-        body: JSON.stringify({
-          email,
-          password,
-        }),
-      }
-    );
-
-
-    const data = await response.json();
-
-
-    if (response.ok) {
-
-      localStorage.setItem(
-        "token",
-        data.access_token
-      );
-
-
-      alert("Login successful!");
-
-      router.push("/dashboard");
-
-    } 
-    
-    else {
-
-      alert(data.detail);
-
+    if (!result.ok) {
+      setError(result.error);
+      return;
     }
 
+    router.push("/dashboard");
   }
 
-
   return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
+      <div className="w-full max-w-sm">
+        <div className="text-center mb-8">
+          <p className="text-xs font-mono font-bold tracking-widest text-green-600 uppercase">
+            EdgePulse
+          </p>
+          <h1 className="text-2xl font-bold text-gray-900 mt-1">
+            Sign in
+          </h1>
+        </div>
 
-    <main className="min-h-screen flex items-center justify-center bg-slate-100">
-
-      <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md">
-
-        <h1 className="text-3xl font-bold text-center text-green-600 mb-6">
-          EdgePulse
-        </h1>
-
-
-        <p className="text-center text-gray-500 mb-6">
-          Login to your account
-        </p>
-
-
-        <form 
-          onSubmit={handleLogin}
-          className="space-y-4"
+        <form
+          onSubmit={handleSubmit}
+          className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 space-y-4"
         >
+          {error && (
+            <div className="bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2 rounded-lg">
+              {error}
+            </div>
+          )}
 
-          <input
-            className="w-full border rounded-lg p-3"
-            type="email"
-            placeholder="Email"
-            value={email}
-            onChange={(e)=>setEmail(e.target.value)}
-          />
+          <label className="block">
+            <span className="text-sm text-gray-600">Email</span>
+            <input
+              type="email"
+              required
+              autoComplete="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
+            />
+          </label>
 
-
-          <input
-            className="w-full border rounded-lg p-3"
-            type="password"
-            placeholder="Password"
-            value={password}
-            onChange={(e)=>setPassword(e.target.value)}
-          />
-
+          <label className="block">
+            <span className="text-sm text-gray-600">Password</span>
+            <input
+              type="password"
+              required
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500"
+            />
+          </label>
 
           <button
             type="submit"
-            className="w-full bg-green-600 text-white p-3 rounded-lg"
+            disabled={submitting}
+            className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg py-2.5 text-sm font-semibold transition"
           >
-            Login
+            {submitting ? "Signing in…" : "Sign in"}
           </button>
-
-
         </form>
 
+        <p className="text-center text-sm text-gray-500 mt-6">
+          Don&apos;t have an account?{" "}
+          <Link href="/register" className="text-green-600 font-semibold hover:text-green-700">
+            Register
+          </Link>
+        </p>
       </div>
-
-    </main>
-
+    </div>
   );
 }

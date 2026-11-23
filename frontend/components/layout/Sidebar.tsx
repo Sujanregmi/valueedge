@@ -30,14 +30,14 @@ type MenuGroup = {
 const menuGroups: MenuGroup[] = [
   {
     label: "Overview",
-    items: [{ name: "Dashboard", path: "/dashboard", icon: LayoutDashboard }],
+    items: [{ name: "Dashboard", path: "/", icon: LayoutDashboard }],
   },
   {
     label: "Trading",
     items: [
       { name: "Value Bets", path: "/value-bets", icon: Zap },
       { name: "Sports", path: "/sports", icon: Trophy },
-      { name: "My Bets", path: "/my-bets", icon: ClipboardList },
+      { name: "My Bets", path: "/portfolio", icon: ClipboardList },
       { name: "Bankroll", path: "/bankroll", icon: Wallet },
     ],
   },
@@ -137,24 +137,7 @@ export default function Sidebar() {
         </nav>
 
         {/* FOOTER / USER CARD */}
-        <div className="border-t border-slate-800 px-4 py-4">
-          <div className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-slate-800 transition">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-green-500 font-bold text-white">
-              U
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium text-white">User</p>
-              <p className="text-xs text-slate-400">Premium</p>
-            </div>
-            <button
-              type="button"
-              className="text-slate-400 hover:text-white"
-              aria-label="Log out"
-            >
-              <LogOut size={16} />
-            </button>
-          </div>
-        </div>
+       
       </aside>
     </>
   );

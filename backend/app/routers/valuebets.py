@@ -5,11 +5,13 @@ from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 from fastapi import APIRouter, Query
+from sqlalchemy import func
 
 from app.database import SessionLocal
 from app.models import ArbitrageOpportunity
 from app.scanner.arbitrage_scanner import (
     scan_for_arbitrage,
+    SPORT_CONFIG,
 )
 
 # ==================================================
@@ -20,6 +22,24 @@ router = APIRouter(
     prefix="/value-bets",
     tags=["Value Bets"],
 )
+
+
+# ==================================================
+# SPORT TOGGLES
+# ==================================================
+#
+# Which sports the automatic + manual scanner actually loops over.
+# Defaults to every sport in SPORT_CONFIG enabled. In-memory for now
+# (resets on restart) -- move to a settings table if you need this
+# to persist across deploys or survive multiple workers.
+
+SPORT_ENABLED: dict[str, bool] = {sport: True for sport in SPORT_CONFIG}
+
+# Per-sport breakdown from the most recent scan run: scanned/matched
+# event counts and how many arbs that sport contributed. Keyed by
+# sport, rebuilt on every run_scan() call. Also in-memory only.
+
+sport_breakdown: dict[str, dict] = {}
 
 
 # ==================================================
@@ -81,7 +101,7 @@ def run_scan(
     commission: float = 0.05,
     min_profit_pct: float = 0.5,
 ):
-    global latest_scan, last_scan_started_at
+    global latest_scan, last_scan_started_at, sport_breakdown
 
     # Stamp this the instant a scan begins -- whether it was fired
     # by the automatic 30-min loop or a manual "Scan Markets" click.
@@ -95,21 +115,20 @@ def run_scan(
         # ------------------------------------------
         # RUN ARBITRAGE SCANNER
         # ------------------------------------------
-        enabled_sports = [
-            "soccer",
-            "tennis",
-            "basketball",
-            "ice hockey",
-            "rugby league",
-            "aussie rules",
-            "baseball",
-            "american football",
-        ]
+        # Driven by SPORT_ENABLED instead of a hardcoded list, so the
+        # Sports page toggle actually controls what gets scanned.
+        enabled_sports = [sport for sport, on in SPORT_ENABLED.items() if on]
 
         all_opportunities = []
 
         total_scanned_events = 0
         total_matched_events = 0
+
+        # Fresh breakdown every run -- a sport that's toggled off (or
+        # was skipped due to an error) simply won't appear, which the
+        # Sports page reads as "no data from the last run" rather than
+        # a stale count from three scans ago.
+        this_run_breakdown: dict[str, dict] = {}
 
         for sport in enabled_sports:
 
@@ -134,6 +153,14 @@ def run_scan(
                     f"SPORT SCAN ERROR " f"[{sport}]:",
                     repr(exc),
                 )
+
+                this_run_breakdown[sport] = {
+                    "status": "error",
+                    "error": str(exc),
+                    "scanned_events": 0,
+                    "matched_events": 0,
+                    "opportunities_found": 0,
+                }
 
                 # Important:
                 # one broken sport does NOT stop
@@ -162,6 +189,14 @@ def run_scan(
 
             all_opportunities.extend(sport_opportunities)
 
+            this_run_breakdown[sport] = {
+                "status": "complete",
+                "error": None,
+                "scanned_events": sport_result.get("scanned_events", 0),
+                "matched_events": sport_result.get("matched_events", 0),
+                "opportunities_found": len(sport_opportunities),
+            }
+
             print(
                 f"{sport.upper()} COMPLETE | "
                 f"Scanned: "
@@ -174,6 +209,8 @@ def run_scan(
             time.sleep(3)
         # Build the same result structure
         # the rest of run_scan() already expects.
+
+        sport_breakdown = this_run_breakdown
 
         result = {
             "scanned_events": total_scanned_events,
@@ -212,10 +249,6 @@ def run_scan(
 
                 opportunity["found_at"] = now_iso
 
-                stake_plan = opportunity.get(
-                    "stake_plan",
-                    {},
-                )
                 raw_start_time = opportunity.get("start_time")
 
                 start_time_dt = (
@@ -225,6 +258,35 @@ def run_scan(
                     )
                     if raw_start_time
                     else None
+                )
+
+                is_cross_book = opportunity.get("type") == "CROSS_BOOK_ARBITRAGE"
+
+                if is_cross_book:
+                    # No single bookmaker/back_odds/lay_odds/stake_plan
+                    # here -- 2-3 legs, each with its own bookmaker,
+                    # odds, and stake. Those columns stay NULL for
+                    # this row; the real data lives in `legs`.
+                    row = ArbitrageOpportunity(
+                        scan_id=scan_id,
+                        sport=opportunity.get("sport", "unknown"),
+                        league=opportunity.get("league"),
+                        event=opportunity.get("event", ""),
+                        exchange="Multiple Bookmakers",
+                        legs=opportunity.get("legs", []),
+                        profit_percentage=opportunity.get("profit_percentage", 0),
+                        guaranteed_profit=opportunity.get("guaranteed_profit", 0),
+                        bookmaker_stake=opportunity.get("total_stake"),
+                        start_time=start_time_dt,
+                        scanned_at=now_dt,
+                    )
+
+                    db.add(row)
+                    continue
+
+                stake_plan = opportunity.get(
+                    "stake_plan",
+                    {},
                 )
 
                 row = ArbitrageOpportunity(
@@ -248,6 +310,9 @@ def run_scan(
                     bookmaker=opportunity.get(
                         "bookmaker",
                         "",
+                    ),
+                    bookmaker_link=opportunity.get(
+                        "bookmaker_link",
                     ),
                     exchange=opportunity.get(
                         "exchange",
@@ -553,6 +618,8 @@ def get_latest_arbitrage():
 
         for row in rows:
 
+            is_cross_book = row.legs is not None
+
             opportunity = {
                 "sport": row.sport,
                 "league": row.league,
@@ -560,13 +627,17 @@ def get_latest_arbitrage():
                 "selection": row.selection,
                 "start_time": (row.start_time.isoformat() if row.start_time else None),
                 "bookmaker": row.bookmaker,
+                "bookmaker_link": row.bookmaker_link,
                 "exchange": row.exchange,
-                "type": "Back/Lay",
+                "type": (
+                    "CROSS_BOOK_ARBITRAGE" if is_cross_book else "BACK_LAY_ARBITRAGE"
+                ),
                 "back_odds": row.back_odds,
                 "lay_odds": row.lay_odds,
                 "commission": row.commission,
                 "profit_percentage": row.profit_percentage,
                 "guaranteed_profit": row.guaranteed_profit,
+                "legs": row.legs,  # populated for cross-book, null for back-lay
                 "stake_plan": {
                     "bookmaker_stake": row.bookmaker_stake,
                     "betfair_lay_stake": row.betfair_lay_stake,
@@ -702,4 +773,80 @@ def start_arbitrage_scan(
     return {
         "status": "started",
         "message": "Arbitrage scan started",
+    }
+
+
+# ==================================================
+# SPORTS: LIST + TOGGLE
+# ==================================================
+
+
+@router.get("/sports")
+def list_sports():
+    """
+    One row per configured sport: whether it's currently enabled for
+    scanning, live opportunity count (real, from the database), and
+    the last scan's breakdown for that sport (in-memory, resets on
+    restart -- see sport_breakdown above).
+    """
+
+    db = SessionLocal()
+
+    try:
+        live_counts_by_sport: dict[str, int] = {}
+
+        rows = (
+            db.query(
+                ArbitrageOpportunity.sport,
+                func.count(ArbitrageOpportunity.id),
+            )
+            .group_by(ArbitrageOpportunity.sport)
+            .all()
+        )
+
+        for sport_name, count in rows:
+            live_counts_by_sport[sport_name] = count
+
+    except Exception as exc:
+
+        print("SPORTS LIVE COUNT ERROR:", repr(exc))
+        live_counts_by_sport = {}
+
+    finally:
+        db.close()
+
+    sports = []
+
+    for sport, config in SPORT_CONFIG.items():
+
+        breakdown = sport_breakdown.get(sport)
+
+        sports.append(
+            {
+                "sport": sport,
+                "name": config.get("name", sport.title()),
+                "enabled": SPORT_ENABLED.get(sport, True),
+                "live_opportunities": live_counts_by_sport.get(sport, 0),
+                "last_run": breakdown,
+            }
+        )
+
+    return {"sports": sports}
+
+
+@router.post("/sports/{sport}/toggle")
+def toggle_sport(sport: str):
+    """
+    Flip whether a sport is included in the next scan (automatic or
+    manual). Does not affect a scan already in progress.
+    """
+
+    if sport not in SPORT_CONFIG:
+        return {"error": f"Unknown sport: {sport}"}
+
+    SPORT_ENABLED[sport] = not SPORT_ENABLED.get(sport, True)
+
+    return {
+        "sport": sport,
+        "enabled": SPORT_ENABLED[sport],
     }

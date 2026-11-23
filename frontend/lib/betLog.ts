@@ -1,21 +1,35 @@
 export const BET_LOG_STORAGE_KEY =
   "edgepulse-bet-log";
 
+
 export type BetStatus =
   | "open"
-  | "settled";
+  | "settled"
+  | "void";
+
 
 export type BetResult =
-  | "win"
-  | "loss"
+  | "won"
+  | "lost"
   | "push"
+  | "void"
   | null;
+
 
 export type StakePlan = {
   bookmaker_stake: number;
   betfair_lay_stake: number;
   lay_liability: number;
   total_capital_required: number;
+};
+
+export type PortfolioLeg = {
+  selection: string;
+  bookmaker: string;
+  odds: number;
+  stake: number;
+  payout_if_wins: number;
+  link?: string | null;
 };
 
 export type PortfolioBet = {
@@ -28,6 +42,8 @@ export type PortfolioBet = {
   exchange: string;
 
   type: string;
+
+  legs?: PortfolioLeg[] | null;
 
   back_odds: number;
   lay_odds: number;
@@ -54,8 +70,7 @@ export type PortfolioBet = {
   notes?: string;
 };
 
-
-export function makeBetId() {
+export function makeBetId(): string {
   return (
     Date.now().toString() +
     "-" +
@@ -66,24 +81,61 @@ export function makeBetId() {
 }
 
 
-export function loadBetLog(): PortfolioBet[] {
+function normalizeBetStatus(
+  status: unknown
+): BetStatus {
+  if (status === "settled") {
+    return "settled";
+  }
+
+  if (status === "void") {
+    return "void";
+  }
+
+  return "open";
+}
+
+
+function normalizeBetResult(
+  result: unknown
+): BetResult {
+  // Convert previously stored result names.
+  if (result === "win") {
+    return "won";
+  }
+
+  if (result === "loss") {
+    return "lost";
+  }
+
   if (
-    typeof window === "undefined"
+    result === "won" ||
+    result === "lost" ||
+    result === "push" ||
+    result === "void"
   ) {
+    return result;
+  }
+
+  return null;
+}
+
+
+export function loadBetLog(): PortfolioBet[] {
+  if (typeof window === "undefined") {
     return [];
   }
 
   try {
-    const raw =
-      localStorage.getItem(
-        BET_LOG_STORAGE_KEY
-      );
+    const raw = localStorage.getItem(
+      BET_LOG_STORAGE_KEY
+    );
 
     if (!raw) {
       return [];
     }
 
-    const parsed =
+    const parsed: unknown =
       JSON.parse(raw);
 
     if (!Array.isArray(parsed)) {
@@ -91,120 +143,168 @@ export function loadBetLog(): PortfolioBet[] {
     }
 
     return parsed.map(
-      (bet: Partial<PortfolioBet>) => ({
-        id:
-          bet.id ??
-          makeBetId(),
+      (
+        bet: Partial<PortfolioBet> &
+          Record<string, unknown>
+      ): PortfolioBet => {
+        const status =
+          normalizeBetStatus(
+            bet.status
+          );
 
-        event:
-          bet.event ??
-          "Unknown event",
+        const result =
+          normalizeBetResult(
+            bet.result
+          );
 
-        selection:
-          bet.selection ??
-          "Unknown",
+        return {
+          id:
+            typeof bet.id === "string"
+              ? bet.id
+              : makeBetId(),
 
-        bookmaker:
-          bet.bookmaker ??
-          "Unknown",
+          event:
+            typeof bet.event === "string"
+              ? bet.event
+              : "Unknown event",
 
-        exchange:
-          bet.exchange ??
-          "Betfair",
+          selection:
+            typeof bet.selection === "string"
+              ? bet.selection
+              : "Unknown",
 
-        type:
-          bet.type ??
-          "back_lay_arbitrage",
+          bookmaker:
+            typeof bet.bookmaker === "string"
+              ? bet.bookmaker
+              : "Unknown",
 
-        back_odds:
-          Number(
-            bet.back_odds ?? 0
-          ),
+          exchange:
+            typeof bet.exchange === "string"
+              ? bet.exchange
+              : "Betfair",
 
-        lay_odds:
-          Number(
-            bet.lay_odds ?? 0
-          ),
+          type:
+            typeof bet.type === "string"
+              ? bet.type
+              : "back_lay_arbitrage",
 
-        commission:
-          Number(
-            bet.commission ?? 0.05
-          ),
+          legs:
+            Array.isArray(bet.legs)
+              ? bet.legs.map((leg: any) => ({
+                selection:
+                  typeof leg.selection === "string"
+                    ? leg.selection
+                    : "Unknown",
 
-        profit_percentage:
-          Number(
-            bet.profit_percentage ?? 0
-          ),
+                bookmaker:
+                  typeof leg.bookmaker === "string"
+                    ? leg.bookmaker
+                    : "Unknown",
 
-        guaranteed_profit:
-          Number(
-            bet.guaranteed_profit ?? 0
-          ),
+                odds: Number(leg.odds ?? 0),
 
-        stake_plan: {
-          bookmaker_stake:
+                stake: Number(leg.stake ?? 0),
+
+                payout_if_wins: Number(
+                  leg.payout_if_wins ?? 0
+                ),
+
+                link:
+                  typeof leg.link === "string"
+                    ? leg.link
+                    : null,
+              }))
+              : null,
+
+          back_odds:
             Number(
-              bet.stake_plan
-                ?.bookmaker_stake ??
-                0
+              bet.back_odds ?? 0
             ),
 
-          betfair_lay_stake:
+          lay_odds:
             Number(
-              bet.stake_plan
-                ?.betfair_lay_stake ??
-                0
+              bet.lay_odds ?? 0
             ),
 
-          lay_liability:
+          commission:
             Number(
-              bet.stake_plan
-                ?.lay_liability ??
-                0
+              bet.commission ?? 0.05
             ),
 
-          total_capital_required:
+          profit_percentage:
             Number(
-              bet.stake_plan
-                ?.total_capital_required ??
-                0
+              bet.profit_percentage ?? 0
             ),
-        },
 
-        status:
-          bet.status === "settled"
-            ? "settled"
-            : "open",
+          guaranteed_profit:
+            Number(
+              bet.guaranteed_profit ?? 0
+            ),
 
-        result:
-          bet.result ??
-          null,
+          stake_plan: {
+            bookmaker_stake:
+              Number(
+                bet.stake_plan
+                  ?.bookmaker_stake ?? 0
+              ),
 
-        settled_profit:
-          bet.settled_profit ??
-          null,
+            betfair_lay_stake:
+              Number(
+                bet.stake_plan
+                  ?.betfair_lay_stake ?? 0
+              ),
 
-        clv:
-          bet.clv ??
-          null,
+            lay_liability:
+              Number(
+                bet.stake_plan
+                  ?.lay_liability ?? 0
+              ),
 
-        found_at:
-          bet.found_at,
+            total_capital_required:
+              Number(
+                bet.stake_plan
+                  ?.total_capital_required ??
+                0
+              ),
+          },
 
-        placed_at:
-          bet.placed_at ??
-          new Date().toISOString(),
+          status,
+          result,
 
-        start_time:
-          bet.start_time ??
-          null,
+          settled_profit:
+            bet.settled_profit == null
+              ? null
+              : Number(
+                bet.settled_profit
+              ),
 
-        notes:
-          bet.notes ??
-          "",
-      })
+          clv:
+            bet.clv == null
+              ? null
+              : Number(bet.clv),
+
+          found_at:
+            typeof bet.found_at === "string"
+              ? bet.found_at
+              : undefined,
+
+          placed_at:
+            typeof bet.placed_at === "string"
+              ? bet.placed_at
+              : new Date().toISOString(),
+
+          start_time:
+            typeof bet.start_time === "string"
+              ? bet.start_time
+              : null,
+
+          notes:
+            typeof bet.notes === "string"
+              ? bet.notes
+              : "",
+        };
+      }
     );
-
   } catch {
     return [];
   }
@@ -213,10 +313,8 @@ export function loadBetLog(): PortfolioBet[] {
 
 export function saveBetLog(
   bets: PortfolioBet[]
-) {
-  if (
-    typeof window === "undefined"
-  ) {
+): void {
+  if (typeof window === "undefined") {
     return;
   }
 
@@ -229,10 +327,10 @@ export function saveBetLog(
 
 export function calculatePendingExposure(
   bets: PortfolioBet[]
-) {
+): number {
   return bets
     .filter(
-      bet =>
+      (bet) =>
         bet.status === "open"
     )
     .reduce(
@@ -247,11 +345,12 @@ export function calculatePendingExposure(
 
 export function calculateSettledProfit(
   bets: PortfolioBet[]
-) {
+): number {
   return bets
     .filter(
-      bet =>
-        bet.status === "settled"
+      (bet) =>
+        bet.status === "settled" ||
+        bet.status === "void"
     )
     .reduce(
       (total, bet) =>
@@ -264,38 +363,34 @@ export function calculateSettledProfit(
 
 export function calculateAverageClv(
   bets: PortfolioBet[]
-) {
-  const graded =
-    bets.filter(
-      bet =>
-        bet.status === "settled" &&
-        bet.clv !== null
-    );
+): number | null {
+  const graded = bets.filter(
+    (bet) =>
+      bet.status === "settled" &&
+      bet.clv !== null
+  );
 
-  if (
-    graded.length === 0
-  ) {
+  if (graded.length === 0) {
     return null;
   }
 
-  const total =
-    graded.reduce(
-      (sum, bet) =>
-        sum +
-        (bet.clv ?? 0),
-      0
-    );
-
-  return (
-    total /
-    graded.length
+  const total = graded.reduce(
+    (sum, bet) =>
+      sum + (bet.clv ?? 0),
+    0
   );
+
+  return total / graded.length;
 }
 
 
 export function exportBetLogCsv(
   bets: PortfolioBet[]
-) {
+): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+
   const headers = [
     "Event",
     "Selection",
@@ -315,48 +410,42 @@ export function exportBetLogCsv(
     "Placed At",
   ];
 
-  const rows =
-    bets.map(
-      bet => [
-        bet.event,
-        bet.selection,
-        bet.bookmaker,
-        bet.exchange,
-        bet.back_odds,
-        bet.lay_odds,
-        bet.stake_plan
-          .bookmaker_stake,
-        bet.stake_plan
-          .betfair_lay_stake,
-        bet.stake_plan
-          .lay_liability,
-        bet.guaranteed_profit,
-        bet.profit_percentage,
-        bet.status,
-        bet.result ?? "",
-        bet.settled_profit ?? "",
-        bet.clv ?? "",
-        bet.placed_at,
-      ]
+  const rows = bets.map(
+    (bet) => [
+      bet.event,
+      bet.selection,
+      bet.bookmaker,
+      bet.exchange,
+      bet.back_odds,
+      bet.lay_odds,
+      bet.stake_plan.bookmaker_stake,
+      bet.stake_plan.betfair_lay_stake,
+      bet.stake_plan.lay_liability,
+      bet.guaranteed_profit,
+      bet.profit_percentage,
+      bet.status,
+      bet.result ?? "",
+      bet.settled_profit ?? "",
+      bet.clv ?? "",
+      bet.placed_at,
+    ]
+  );
+
+  const escapeCsv = (
+    value: string | number
+  ): string => {
+    const stringValue =
+      String(value ?? "");
+
+    return (
+      '"' +
+      stringValue.replace(
+        /"/g,
+        '""'
+      ) +
+      '"'
     );
-
-  const escapeCsv =
-    (
-      value:
-        string | number
-    ) => {
-      const stringValue =
-        String(value ?? "");
-
-      return (
-        '"' +
-        stringValue.replace(
-          /"/g,
-          '""'
-        ) +
-        '"'
-      );
-    };
+  };
 
   const csv = [
     headers
@@ -364,39 +453,33 @@ export function exportBetLogCsv(
       .join(","),
 
     ...rows.map(
-      row =>
+      (row) =>
         row
           .map(escapeCsv)
           .join(",")
     ),
   ].join("\n");
 
-  const blob =
-    new Blob(
-      [csv],
-      {
-        type:
-          "text/csv;charset=utf-8;",
-      }
-    );
+  const blob = new Blob(
+    [csv],
+    {
+      type:
+        "text/csv;charset=utf-8;",
+    }
+  );
 
   const url =
-    URL.createObjectURL(
-      blob
-    );
+    URL.createObjectURL(blob);
 
   const link =
-    document.createElement(
-      "a"
-    );
+    document.createElement("a");
 
   link.href = url;
 
   link.download =
-    `edgepulse-bet-log-${
-      new Date()
-        .toISOString()
-        .slice(0, 10)
+    `edgepulse-bet-log-${new Date()
+      .toISOString()
+      .slice(0, 10)
     }.csv`;
 
   document.body.appendChild(
@@ -404,10 +487,7 @@ export function exportBetLogCsv(
   );
 
   link.click();
-
   link.remove();
 
-  URL.revokeObjectURL(
-    url
-  );
+  URL.revokeObjectURL(url);
 }

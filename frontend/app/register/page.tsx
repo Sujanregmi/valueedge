@@ -1,117 +1,264 @@
 "use client";
 
-import { useState } from "react";
-import Input from "@/components/ui/Input";
-import Button from "@/components/ui/Button";
+import {
+  useState,
+  type FormEvent,
+} from "react";
+
+import Link from "next/link";
+
+import {
+  useRouter,
+} from "next/navigation";
+
+import {
+  useAuth,
+} from "@/lib/AuthContext";
 
 
 export default function RegisterPage() {
+  const {
+    register,
+    refresh,
+  } = useAuth();
 
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const router = useRouter();
+
+  const [name, setName] =
+    useState("");
+
+  const [email, setEmail] =
+    useState("");
+
+  const [password, setPassword] =
+    useState("");
+
+  const [
+    confirmPassword,
+    setConfirmPassword,
+  ] = useState("");
+
+  const [error, setError] =
+    useState<string | null>(null);
+
+  const [submitting, setSubmitting] =
+    useState(false);
 
 
-  async function handleRegister(e: React.FormEvent) {
+  async function handleSubmit(
+    event: FormEvent<HTMLFormElement>
+  ) {
+    event.preventDefault();
 
-    e.preventDefault();
+    if (submitting) {
+      return;
+    }
 
+    setError(null);
 
-    const response = await fetch(
-      "http://localhost:8000/register",
-      {
-        method: "POST",
+    const cleanName = name.trim();
 
-        headers: {
-          "Content-Type": "application/json",
-        },
+    const cleanEmail = email
+      .trim()
+      .toLowerCase();
 
-        body: JSON.stringify({
-          name,
-          email,
-          password,
-        }),
+    if (!cleanName) {
+      setError(
+        "Please enter your name"
+      );
+      return;
+    }
+
+    if (!cleanEmail) {
+      setError(
+        "Please enter your email"
+      );
+      return;
+    }
+
+    if (password.length < 8) {
+      setError(
+        "Password must be at least 8 characters"
+      );
+      return;
+    }
+
+    if (
+      password !== confirmPassword
+    ) {
+      setError(
+        "Passwords don't match"
+      );
+      return;
+    }
+
+    setSubmitting(true);
+
+    try {
+      const result = await register(
+        cleanName,
+        cleanEmail,
+        password
+      );
+
+      if (!result.ok) {
+        setError(result.error);
+        return;
       }
-    );
 
+      // Confirm that the session cookie is
+      // available before entering a protected page.
+      await refresh();
 
-    const data = await response.json();
+      router.replace("/dashboard");
+      router.refresh();
 
+    } catch (registrationError) {
+      console.error(
+        "Registration failed:",
+        registrationError
+      );
 
-    if (response.ok) {
-      alert("Account created successfully!");
-      console.log(data);
+      setError(
+        "Unable to create your account. Please try again."
+      );
+
+    } finally {
+      setSubmitting(false);
     }
-
-    else {
-      alert(data.detail);
-    }
-
   }
 
 
   return (
-
-    <main className="min-h-screen flex items-center justify-center bg-slate-100">
-
-      <div className="w-full max-w-md bg-white rounded-2xl shadow-xl p-8">
-
-
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
+      <div className="w-full max-w-sm">
         <div className="text-center mb-8">
-
-          <h1 className="text-4xl font-bold text-green-600">
+          <p className="text-xs font-mono font-bold tracking-widest text-green-600 uppercase">
             EdgePulse
-          </h1>
-
-          <p className="text-gray-500 mt-2">
-            Create your account
           </p>
 
+          <h1 className="text-2xl font-bold text-gray-900 mt-1">
+            Create an account
+          </h1>
         </div>
 
-
-        <form 
-          onSubmit={handleRegister}
-          className="space-y-5"
+        <form
+          onSubmit={handleSubmit}
+          className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6 space-y-4"
         >
+          {error && (
+            <div
+              role="alert"
+              className="bg-red-50 border border-red-200 text-red-700 text-sm px-3 py-2 rounded-lg"
+            >
+              {error}
+            </div>
+          )}
 
-          <input
-            className="w-full border rounded-lg p-3"
-            placeholder="Full Name"
-            value={name}
-            onChange={(e)=>setName(e.target.value)}
-          />
+          <label className="block">
+            <span className="text-sm text-gray-600">
+              Name
+            </span>
 
+            <input
+              type="text"
+              required
+              autoComplete="name"
+              value={name}
+              disabled={submitting}
+              onChange={(event) =>
+                setName(
+                  event.target.value
+                )
+              }
+              className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 disabled:bg-gray-100"
+            />
+          </label>
 
-          <input
-            className="w-full border rounded-lg p-3"
-            placeholder="Email"
-            type="email"
-            value={email}
-            onChange={(e)=>setEmail(e.target.value)}
-          />
+          <label className="block">
+            <span className="text-sm text-gray-600">
+              Email
+            </span>
 
+            <input
+              type="email"
+              required
+              autoComplete="email"
+              value={email}
+              disabled={submitting}
+              onChange={(event) =>
+                setEmail(
+                  event.target.value
+                )
+              }
+              className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 disabled:bg-gray-100"
+            />
+          </label>
 
-          <input
-            className="w-full border rounded-lg p-3"
-            placeholder="Password"
-            type="password"
-            value={password}
-            onChange={(e)=>setPassword(e.target.value)}
-          />
+          <label className="block">
+            <span className="text-sm text-gray-600">
+              Password
+            </span>
 
+            <input
+              type="password"
+              required
+              minLength={8}
+              autoComplete="new-password"
+              value={password}
+              disabled={submitting}
+              onChange={(event) =>
+                setPassword(
+                  event.target.value
+                )
+              }
+              className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 disabled:bg-gray-100"
+            />
+          </label>
 
-          <Button type="submit">
-            Create Account
-          </Button>
+          <label className="block">
+            <span className="text-sm text-gray-600">
+              Confirm password
+            </span>
 
+            <input
+              type="password"
+              required
+              minLength={8}
+              autoComplete="new-password"
+              value={confirmPassword}
+              disabled={submitting}
+              onChange={(event) =>
+                setConfirmPassword(
+                  event.target.value
+                )
+              }
+              className="mt-1 w-full border border-gray-300 rounded-lg px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 disabled:bg-gray-100"
+            />
+          </label>
 
+          <button
+            type="submit"
+            disabled={submitting}
+            className="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-white rounded-lg py-2.5 text-sm font-semibold transition"
+          >
+            {submitting
+              ? "Creating account…"
+              : "Create account"}
+          </button>
         </form>
 
+        <p className="text-center text-sm text-gray-500 mt-6">
+          Already have an account?{" "}
 
+          <Link
+            href="/login"
+            className="text-green-600 font-semibold hover:text-green-700"
+          >
+            Sign in
+          </Link>
+        </p>
       </div>
-
-    </main>
-
+    </div>
   );
 }

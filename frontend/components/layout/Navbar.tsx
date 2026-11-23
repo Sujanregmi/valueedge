@@ -1,11 +1,40 @@
 "use client";
 
-import { Menu, Search, Bell, ChevronDown, Zap } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { Menu, Search, Bell, ChevronDown, Zap, User as UserIcon, LogOut } from "lucide-react";
 
 import { useSidebar } from "@/components/layout/SidebarContext";
+import { useAuth } from "@/lib/AuthContext";
 
 export default function Navbar() {
   const { toggle } = useSidebar();
+  const { user, logout } = useAuth();
+  const router = useRouter();
+
+  const [menuOpen, setMenuOpen] = useState(false);
+  const menuRef = useRef<HTMLDivElement>(null);
+
+  // Close the dropdown on any click outside it.
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (menuRef.current && !menuRef.current.contains(event.target as Node)) {
+        setMenuOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  async function handleLogout() {
+    setMenuOpen(false);
+    await logout();
+    router.push("/login");
+  }
+
+  const displayName = user?.name ?? "…";
+  const initial = user?.name ? user.name.charAt(0).toUpperCase() : "?";
 
   return (
     <header className="sticky top-0 z-30 flex h-16 items-center justify-between gap-4 border-b border-gray-200 bg-white px-4 shadow-sm sm:px-6 lg:px-8">
@@ -60,21 +89,56 @@ export default function Navbar() {
           <span className="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full bg-rose-500 ring-2 ring-white" />
         </button>
 
-        <button
-          type="button"
-          className="flex items-center gap-2.5 rounded-lg py-1 pl-1 pr-2 hover:bg-gray-50"
-        >
-          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-green-500 font-bold text-white">
-            U
-          </div>
-          <div className="hidden text-left sm:block">
-            <p className="text-sm font-medium leading-tight text-gray-900">
-              User
-            </p>
-            <p className="text-xs leading-tight text-gray-500">Premium</p>
-          </div>
-          <ChevronDown size={16} className="hidden text-gray-400 sm:block" />
-        </button>
+        {/* USER MENU */}
+        <div className="relative" ref={menuRef}>
+          <button
+            type="button"
+            onClick={() => setMenuOpen((v) => !v)}
+            aria-expanded={menuOpen}
+            aria-haspopup="true"
+            className="flex items-center gap-2.5 rounded-lg py-1 pl-1 pr-2 hover:bg-gray-50"
+          >
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-green-500 font-bold text-white">
+              {initial}
+            </div>
+            <div className="hidden text-left sm:block">
+              <p className="text-sm font-medium leading-tight text-gray-900">
+                {displayName}
+              </p>
+              <p className="text-xs leading-tight text-gray-500">
+                {user?.email ?? ""}
+              </p>
+            </div>
+            <ChevronDown
+              size={16}
+              className={`hidden text-gray-400 transition-transform sm:block ${
+                menuOpen ? "rotate-180" : ""
+              }`}
+            />
+          </button>
+
+          {menuOpen && (
+            <div className="absolute right-0 mt-2 w-48 rounded-xl border border-gray-200 bg-white py-1 shadow-lg">
+              <Link
+                href="/settings"
+                onClick={() => setMenuOpen(false)}
+                className="flex items-center gap-2.5 px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50"
+              >
+                <UserIcon size={16} className="text-gray-400" />
+                Account
+              </Link>
+
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="flex w-full items-center gap-2.5 px-4 py-2.5 text-sm text-red-600 hover:bg-red-50"
+              >
+                <LogOut size={16} />
+                Logout
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </header>
   );

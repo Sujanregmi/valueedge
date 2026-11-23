@@ -8,15 +8,16 @@ from sqlalchemy import (
     Integer,
     String,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 
 from sqlalchemy.orm import relationship
 
 from .database import Base
 
-
 # ==================================================
 # USER
 # ==================================================
+
 
 class User(Base):
     __tablename__ = "users"
@@ -64,6 +65,7 @@ class User(Base):
 # BOOKMAKER
 # ==================================================
 
+
 class Bookmaker(Base):
     __tablename__ = "bookmakers"
 
@@ -98,6 +100,7 @@ class Bookmaker(Base):
 # ==================================================
 # BET
 # ==================================================
+
 
 class Bet(Base):
     __tablename__ = "bets"
@@ -174,6 +177,7 @@ class Bet(Base):
 # BANKROLL
 # ==================================================
 
+
 class Bankroll(Base):
     __tablename__ = "bankroll"
 
@@ -215,6 +219,7 @@ class Bankroll(Base):
 # ==================================================
 # ARBITRAGE OPPORTUNITY
 # ==================================================
+
 
 class ArbitrageOpportunity(Base):
     __tablename__ = "arbitrage_opportunities"
@@ -258,14 +263,19 @@ class ArbitrageOpportunity(Base):
 
     selection = Column(
         String,
-        nullable=False,
+        nullable=True,  # relaxed: cross-book bets have no single
+        # selection -- see `legs` below instead
     )
 
     bookmaker = Column(
         String,
-        nullable=False,
+        nullable=True,  # relaxed: cross-book bets span multiple
+        # bookmakers, one per leg -- see `legs` below
     )
-
+    bookmaker_link = Column(
+        String,
+        nullable=True,  # direct bookmaker/event/betslip URL when available
+    )
     exchange = Column(
         String,
         nullable=False,
@@ -274,17 +284,18 @@ class ArbitrageOpportunity(Base):
 
     back_odds = Column(
         Float,
-        nullable=False,
+        nullable=True,  # relaxed: not meaningful for cross-book
     )
 
     lay_odds = Column(
         Float,
-        nullable=False,
+        nullable=True,  # relaxed: not meaningful for cross-book
     )
 
     commission = Column(
         Float,
-        nullable=False,
+        nullable=True,  # relaxed: cross-book bets between plain
+        # bookmakers typically have no commission at all
     )
 
     profit_percentage = Column(
@@ -299,22 +310,37 @@ class ArbitrageOpportunity(Base):
 
     bookmaker_stake = Column(
         Float,
-        nullable=False,
+        nullable=True,  # relaxed: cross-book stake is split across
+        # legs (see `legs` below) rather than one bookmaker stake
     )
 
     betfair_lay_stake = Column(
         Float,
-        nullable=False,
+        nullable=True,  # relaxed: no exchange leg in cross-book
     )
 
     lay_liability = Column(
         Float,
-        nullable=False,
+        nullable=True,  # relaxed: no exchange leg in cross-book
     )
 
     total_capital_required = Column(
         Float,
-        nullable=False,
+        nullable=True,  # relaxed: not populated for cross-book --
+        # sum the `legs` stakes instead
+    )
+
+    # --------------------------------------------
+    # ADDED: cross-book ("surebet") arbitrage has 2-3 legs, each
+    # with its own bookmaker/odds/stake -- doesn't fit the single
+    # bookmaker/back_odds/lay_odds columns above, which stay
+    # populated (and this stays NULL) for ordinary back-lay bets.
+    # Shape: [{selection, bookmaker, odds, stake, payout_if_wins}, ...]
+    # --------------------------------------------
+
+    legs = Column(
+        JSONB,
+        nullable=True,
     )
 
     start_time = Column(

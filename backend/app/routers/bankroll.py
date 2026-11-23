@@ -1,40 +1,78 @@
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
-from ..database import SessionLocal
 from .. import models
+from ..dependencies import get_db, get_current_user
 
 
 router = APIRouter(
     prefix="/bankroll",
-    tags=["Bankroll"]
+    tags=["Bankroll"],
 )
 
 
-def get_db():
-
-    db = SessionLocal()
-
-    try:
-        yield db
-
-    finally:
-        db.close()
+class BankrollUpdate(BaseModel):
+    balance: float = Field(ge=0)
 
 
+# ============================================================
+# GET CURRENT USER BANKROLL
+# ============================================================
 
-# Get user bankroll
-@router.get("/{user_id}")
+@router.get("")
 def get_bankroll(
-    user_id:int,
-    db:Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
 ):
+    bankroll = (
+        db.query(models.Bankroll)
+        .filter(
+            models.Bankroll.user_id == current_user.id
+        )
+        .first()
+    )
 
-    bankroll = db.query(
-        models.Bankroll
-    ).filter(
-        models.Bankroll.user_id == user_id
-    ).first()
+    if not bankroll:
+        return {
+            "id": None,
+            "user_id": current_user.id,
+            "balance": 0,
+        }
 
+    return bankroll
+
+
+# ============================================================
+# CREATE OR UPDATE CURRENT USER BANKROLL
+# ============================================================
+
+@router.patch("")
+def update_bankroll(
+    payload: BankrollUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    bankroll = (
+        db.query(models.Bankroll)
+        .filter(
+            models.Bankroll.user_id == current_user.id
+        )
+        .first()
+    )
+
+    if bankroll:
+        bankroll.balance = payload.balance
+
+    else:
+        bankroll = models.Bankroll(
+            user_id=current_user.id,
+            balance=payload.balance,
+        )
+
+        db.add(bankroll)
+
+    db.commit()
+    db.refresh(bankroll)
 
     return bankroll

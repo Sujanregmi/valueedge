@@ -575,6 +575,102 @@ class MatcherService:
         )
 
 
+    # ==================================================
+    # GENDER / COMPETITION-TYPE GUARD
+    # ==================================================
+    #
+    # Without this, a men's and women's fixture with similar or
+    # identical team names (e.g. national teams, or a club with both
+    # a men's and women's side) can pass participant + date matching
+    # and get treated as the same event -- especially since league
+    # validation is SKIPPED whenever either provider is missing
+    # league metadata (see leagues_match). Two legs of a supposed
+    # arbitrage bet that aren't actually the same real-world event
+    # have no genuine profit guarantee at all, so this is a hard
+    # gate, not a scoring adjustment.
+    #
+    # This is a heuristic keyword list, not exhaustive -- extend it
+    # as new false-match cases turn up in debug logs (reason will
+    # show as "gender_mismatch").
+
+    WOMENS_INDICATORS = [
+        "women",
+        "woman",
+        "ladies",
+        "female",
+        "feminin",   # covers feminine/féminine
+        "femenino",  # Spanish
+        "feminino",  # Portuguese
+        "feminile",  # Italian
+        "frauen",    # German
+        "damallsvenskan",  # Swedish women's top league
+        "damligan",
+        "kvinner",   # Norwegian
+        "kvinde",    # Danish
+        "wsl",       # Women's Super League
+        "nwsl",      # National Women's Soccer League (US)
+        "wwc",       # Women's World Cup
+        "w-league",
+        "w league",
+    ]
+
+    @staticmethod
+    def is_womens_competition(*texts: str | None) -> bool:
+        """
+        True if any of the given texts (event name, league/competition
+        name) contain a women's-competition indicator. Uses a light
+        lowercase-only pass rather than the heavily punctuation-stripped
+        normalize(), so hyphenated indicators like "W-League" still
+        match as a phrase.
+        """
+
+        combined = " ".join(t for t in texts if t).lower()
+
+        return any(
+            indicator in combined
+            for indicator in MatcherService.WOMENS_INDICATORS
+        )
+
+
+    # ==================================================
+    # START-TIME HELPER (for the time-tolerance guard)
+    # ==================================================
+
+    @staticmethod
+    def _to_epoch_seconds(value) -> float | None:
+        """
+        Same accepted input types as australian_date() (unix
+        timestamp, datetime, ISO string), but returns epoch seconds
+        instead of a calendar date -- used for the time-tolerance
+        check below, which needs actual elapsed time, not just
+        whether two timestamps fall on the same calendar day.
+        """
+
+        if value is None:
+            return None
+
+        if isinstance(value, (int, float)):
+            return float(value)
+
+        if isinstance(value, datetime):
+            dt = value
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.timestamp()
+
+        if isinstance(value, str):
+            iso_value = value.replace("Z", "+00:00")
+            try:
+                dt = datetime.fromisoformat(iso_value)
+            except ValueError:
+                return None
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.timestamp()
+
+        return None
+
+
     @staticmethod
     def get_betfair_league(
         event_result,
@@ -919,6 +1015,35 @@ class MatcherService:
 
 
         # ------------------------------------------
+        # Gender / competition-type guard
+        #
+        # Hard gate: if one side reads as a women's competition and
+        # the other doesn't, reject regardless of how well names and
+        # dates line up. This is what stops a men's and women's
+        # fixture with similar team names from being treated as the
+        # same event.
+        # ------------------------------------------
+
+        odds_is_womens = MatcherService.is_womens_competition(
+            odds_event_name,
+            odds_league,
+        )
+
+        betfair_is_womens = MatcherService.is_womens_competition(
+            betfair_event_name,
+            betfair_league,
+        )
+
+        if odds_is_womens != betfair_is_womens:
+
+            return (
+                False,
+                score,
+                "gender_mismatch",
+            )
+
+
+        # ------------------------------------------
         # League validation
         # ------------------------------------------
 
@@ -971,6 +1096,39 @@ class MatcherService:
                 score,
                 "date",
             )
+
+
+        # ------------------------------------------
+        # Time-tolerance guard
+        #
+        # Same calendar date alone isn't tight enough -- two
+        # genuinely different fixtures for the same two teams/names
+        # (a double-header, or a coincidental same-day clash) can
+        # share an Australian calendar date while kicking off many
+        # hours apart. Exact minute-level matching is still too
+        # strict (providers round/report kickoff times slightly
+        # differently), so this only rejects when the gap is large
+        # enough that it almost certainly isn't provider rounding --
+        # tune TIME_TOLERANCE_HOURS if this ever proves too tight or
+        # too loose against real data.
+        # ------------------------------------------
+
+        TIME_TOLERANCE_HOURS = 6
+
+        odds_epoch = MatcherService._to_epoch_seconds(odds_start_time)
+        betfair_epoch = MatcherService._to_epoch_seconds(betfair_start_time)
+
+        if odds_epoch is not None and betfair_epoch is not None:
+
+            diff_hours = abs(odds_epoch - betfair_epoch) / 3600
+
+            if diff_hours > TIME_TOLERANCE_HOURS:
+
+                return (
+                    False,
+                    score,
+                    "time_mismatch",
+                )
 
 
         return (

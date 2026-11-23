@@ -1,15 +1,14 @@
 import os
+import time
 
 import betfairlightweight
 from betfairlightweight import filters
 from dotenv import load_dotenv
 
-
 load_dotenv()
 
 
 class BetfairService:
-
     def __init__(self):
         self.client = betfairlightweight.APIClient(
             username=os.getenv("BETFAIR_USERNAME"),
@@ -17,11 +16,44 @@ class BetfairService:
             app_key=os.getenv("BETFAIR_APP_KEY"),
         )
 
+        # betfairlightweight defaults to a 3.05s read timeout on
+        # every endpoint (connect_timeout/read_timeout are class
+        # attributes, not constructor args). That's too tight for
+        # listMarketCatalogue once multiple market types are
+        # requested per call -- raise it here.
+        self.client.betting.connect_timeout = 10
+        self.client.betting.read_timeout = 30
+
+        # login_interactive() goes through a SEPARATE identitysso
+        # endpoint, not client.betting -- it was never covered by
+        # the timeout override above. With no ceiling at all, a
+        # slow/unresponsive login attempt (e.g. on sport #2 of an
+        # 8-sport scan cycle) could hang indefinitely with no error
+        # ever surfacing, which is what "scanner just stops" looks
+        # like from the outside.
+        self.client.login.connect_timeout = 10
+        self.client.login.read_timeout = 30
+
         # Cache event_id -> MATCH_ODDS catalogue
         self._market_cache = {}
 
-    def login(self):
-        self.client.login_interactive()
+    def login(self, retries=2):
+        last_exc = None
+
+        for attempt in range(1, retries + 2):
+            try:
+                self.client.login_interactive()
+                return
+            except Exception as exc:
+                last_exc = exc
+                print(
+                    f"Betfair login attempt {attempt} failed:",
+                    repr(exc),
+                )
+                if attempt <= retries:
+                    time.sleep(2 * attempt)
+
+        raise last_exc
 
     def get_event_types(self):
         return self.client.betting.list_event_types()
@@ -35,45 +67,38 @@ class BetfairService:
             )
         )
 
-    def get_match_odds_market(
-        self,
-        event_id,
-    ):
-        """
-        Fetch and cache the MATCH_ODDS market
-        catalogue for one Betfair event.
-        """
 
+    def get_markets(self, event_id, market_type_codes, max_results=20, retries=2):
         event_id = str(event_id)
+        cache_key = (event_id, tuple(sorted(market_type_codes)))
 
-        if event_id in self._market_cache:
-            return self._market_cache[
-                event_id
-            ]
+        if cache_key in self._market_cache:
+            return self._market_cache[cache_key]
 
-        markets = (
-            self.client.betting
-            .list_market_catalogue(
-                filter=filters.market_filter(
-                    event_ids=[
-                        event_id
-                    ],
-                    market_type_codes=[
-                        "MATCH_ODDS"
-                    ],
-                ),
-                max_results=5,
-                market_projection=[
-                    "RUNNER_DESCRIPTION"
-                ],
-            )
-        )
+        last_exc = None
+        for attempt in range(1, retries + 2):
+            try:
+                markets = self.client.betting.list_market_catalogue(
+                    filter=filters.market_filter(
+                        event_ids=[event_id],
+                        market_type_codes=market_type_codes,
+                    ),
+                    max_results=max_results,
+                    market_projection=["RUNNER_DESCRIPTION", "MARKET_DESCRIPTION"],
+                )
+                self._market_cache[cache_key] = markets
+                return markets
+            except Exception as exc:
+                last_exc = exc
+                print(f"get_markets attempt {attempt} failed for {event_id}:", repr(exc))
+                if attempt <= retries:
+                    time.sleep(1.5 * attempt)
 
-        self._market_cache[
-            event_id
-        ] = markets
+        raise last_exc
 
-        return markets
+    def get_match_odds_market(self, event_id):
+        """Back-compat wrapper — existing H2H code keeps working."""
+        return self.get_markets(event_id, ["MATCH_ODDS"], max_results=5)
 
     def get_market_book(
         self,

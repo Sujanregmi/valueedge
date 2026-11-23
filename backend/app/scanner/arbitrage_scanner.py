@@ -23,67 +23,84 @@ from datetime import datetime, timezone
 from app.services.betfair_service import BetfairService
 from app.services.matcher_service import MatcherService
 from app.engine.arbitrage_engine import find_back_lay_arbitrage
-from app.services.the_odds_api_service import get_odds
+from app.engine.cross_book_engine import find_cross_book_arbitrage
+from app.services.the_odds_api_service import get_odds, get_all_sport_keys
 
 # ==================================================
 # CONFIG
 # ==================================================
 #
-# `odds_api_sport_key` is the sport_key The Odds API expects
-# (see GET /v4/sports for the authoritative, always-current list).
-# These are single "primary league" keys for a first pass — if you
-# want multi-league coverage per sport (e.g. all soccer leagues,
-# not just EPL), turn this into a list and loop over it in step 2.
+# `odds_api_sport_keys` is a LIST of sport_key values The Odds API
+# expects (see GET /v4/sports for the authoritative, always-current
+# list -- that endpoint costs zero quota, use it to verify any key
+# you're unsure about before relying on it).
 #
-# IMPORTANT: verify these against your Odds API account/plan before
-# relying on them — some leagues are gated behind paid tiers.
+# Soccer covers multiple leagues since one league (EPL) misses most
+# of the world's fixtures. Every key below except "soccer_epl" and
+# "soccer_germany_bundesliga" is my best-confidence guess based on
+# The Odds API's naming pattern (soccer_{country}_{league}) -- run
+# check_sport_keys.py (below) to confirm/correct these against the
+# real API before trusting them blindly. A wrong key here just means
+# that league silently returns 0 events for this sport, not a crash
+# -- see the per-key try/except in step 2.
+#
+# IMPORTANT: verify these against your Odds API account/plan too --
+# some leagues are gated behind paid tiers.
+
 
 SPORT_CONFIG = {
     "soccer": {
         "name": "Soccer",
         "betfair_event_type_id": "1",
-        "odds_api_sport_key": "soccer_epl",
+        "odds_api_prefix": "soccer_",
     },
     "tennis": {
         "name": "Tennis",
         "betfair_event_type_id": "2",
-        "odds_api_sport_key": "tennis",
+        "odds_api_prefix": "tennis_",
     },
     "basketball": {
         "name": "Basketball",
         "betfair_event_type_id": "7522",
-        "odds_api_sport_key": "basketball_nba",
+        "odds_api_prefix": "basketball_",
     },
     "ice hockey": {
         "name": "Ice Hockey",
         "betfair_event_type_id": "7524",
-        "odds_api_sport_key": "icehockey_nhl",
+        "odds_api_prefix": "icehockey_",
     },
     "rugby league": {
         "name": "Rugby League",
         "betfair_event_type_id": "1477",
-        "odds_api_sport_key": "rugbyleague_nrl",
+        "odds_api_prefix": "rugbyleague_",
     },
     "aussie rules": {
         "name": "Australian Rules",
         "betfair_event_type_id": "61420",
-        "odds_api_sport_key": "aussierules_afl",
+        "odds_api_prefix": "aussierules_",
     },
     "baseball": {
         "name": "Baseball",
         "betfair_event_type_id": "7511",
-        "odds_api_sport_key": "baseball_mlb",
+        "odds_api_prefix": "baseball_",
     },
     "american football": {
         "name": "American Football",
         "betfair_event_type_id": "6423",
-        "odds_api_sport_key": "americanfootball_nfl",
+        "odds_api_prefix": "americanfootball_",
     },
 }
 
 MAX_SNAPSHOT_WORKERS = 6
 
 STRICT_EVENT_MATCH_THRESHOLD = 0.82
+
+# How far ahead (days) it's worth attempting Betfair matching at
+# all. Unverified guess -- override per sport via
+# SPORT_CONFIG[sport]["max_days_ahead"], e.g. if you observe NFL
+# markets open earlier/later than 21 days, add
+# "max_days_ahead": 14 to that sport's config entry.
+DEFAULT_MAX_DAYS_AHEAD = 21
 
 STRICT_RUNNER_MATCH_THRESHOLD = 0.82
 
@@ -132,7 +149,21 @@ def scan_for_arbitrage(
 
     betfair_event_type_id = sport_config["betfair_event_type_id"]
     sport_name = sport_config["name"]
-    odds_api_sport_key = sport_config["odds_api_sport_key"]
+
+    # Resolve the actual league keys to fetch. If odds_api_prefix is
+    # set, discover every currently in-season league matching that
+    # prefix (e.g. every "soccer_*" league) rather than using a fixed
+    # list -- see get_all_sport_keys() for the quota implications.
+    odds_api_prefix = sport_config["odds_api_prefix"]
+
+    odds_api_sport_keys = get_all_sport_keys(prefix=odds_api_prefix)
+
+    print(
+        f"Discovered {len(odds_api_sport_keys)} active " f"{sport_name} competitions:"
+    )
+
+    for key in odds_api_sport_keys:
+        print(f"  - {key}")
 
     print("=" * 60)
     print(f"EDGEPULSE ARBITRAGE SCANNER - {sport_name}")
@@ -165,13 +196,28 @@ def scan_for_arbitrage(
     # ==================================================
     # 2. THE ODDS API EVENTS + BOOKMAKER ODDS
     # ==================================================
+    #
+    # Fetches every configured league for this sport and merges the
+    # results. A single league's fetch failing (wrong key, that
+    # league gated behind a higher plan tier, temporary API issue)
+    # only drops that league's events -- it does NOT abort the whole
+    # sport, matching the defensive per-item error handling used
+    # everywhere else in this file.
 
-    print(f"Fetching The Odds API {sport_name} events ({odds_api_sport_key})...")
+    raw_events = []
 
-    try:
-        raw_events = get_odds(sport_key=odds_api_sport_key)
-    except Exception as exc:
-        print("Failed to fetch The Odds API events:", exc)
+    for league_key in odds_api_sport_keys:
+        print(f"Fetching The Odds API {sport_name} events ({league_key})...")
+
+        try:
+            league_events = get_odds(sport_key=league_key)
+            raw_events.extend(league_events)
+        except Exception as exc:
+            print(f"Failed to fetch {league_key}:", exc)
+            continue
+
+    if not raw_events:
+        print(f"No events returned for any {sport_name} league.")
         return {
             "sport": sport,
             "sport_name": sport_name,
@@ -234,9 +280,15 @@ def scan_for_arbitrage(
             if bookmaker_name.strip().lower() in EXCLUDED_BOOKMAKERS:
                 continue
 
+            # The Odds API may provide a bookmaker-level event link.
+            bookmaker_link = bookmaker.get("link")
+
             for market in bookmaker.get("markets", []):
                 if market.get("key") != "h2h":
                     continue
+
+                # Some bookmakers may provide a more specific market link.
+                market_link = market.get("link")
 
                 for outcome in market.get("outcomes", []):
                     selection = outcome.get("name")
@@ -245,12 +297,19 @@ def scan_for_arbitrage(
                     if not selection or odds is None:
                         continue
 
+                    # Prefer the deepest / most specific link available:
+                    # outcome -> market -> bookmaker/event.
+                    outcome_link = outcome.get("link")
+
+                    bet_link = outcome_link or market_link or bookmaker_link
+
                     current = best_back_odds.get(selection)
 
                     if current is None or odds > current["odds"]:
                         best_back_odds[selection] = {
                             "odds": odds,
                             "bookmaker": bookmaker_name,
+                            "link": bet_link,
                         }
 
         existing = grouped_by_key.get(dedup_key)
@@ -300,6 +359,78 @@ def scan_for_arbitrage(
 
         if not event_name:
             continue
+
+        # ------------------------------------------
+        # CROSS-BOOK ARBITRAGE (no Betfair needed)
+        #
+        # Runs independently of Betfair matching below -- checks
+        # this event's own best_back_odds (already built in step 2)
+        # for a surebet across different bookmakers on the same
+        # event. Catches opportunities even on events Betfair
+        # doesn't list at all, since it never touches betfair_events.
+        #
+        # Wrapped defensively: a bad event here (malformed odds,
+        # unexpected data shape) must NEVER abort the rest of this
+        # function -- back-lay detection below still has to run
+        # regardless of what happens in this block.
+        # ------------------------------------------
+
+        try:
+            cross_book_result = find_cross_book_arbitrage(
+                event=event_name,
+                best_back_odds=group.get("best_back_odds", {}),
+                total_stake=bookmaker_stake,
+                min_profit_pct=min_profit_pct,
+            )
+        except Exception as exc:
+            print("Cross-book check failed for", event_name, ":", exc)
+            cross_book_result = None
+
+        if cross_book_result:
+            cross_book_result["start_time"] = start_time
+            cross_book_result["sport"] = sport
+            cross_book_result["league"] = league
+
+            opportunities.append(cross_book_result)
+
+            print(
+                "[CROSS-BOOK ARB] "
+                f"{event_name} | "
+                f"{cross_book_result['profit_percentage']:.2f}% | "
+                f"${cross_book_result['guaranteed_profit']:.2f} | "
+                f"{len(cross_book_result['legs'])}-way"
+            )
+
+        # ------------------------------------------
+        # SKIP BETFAIR MATCHING FOR FAR-FUTURE EVENTS
+        #
+        # Betfair typically only opens MATCH_ODDS markets some
+        # window ahead of kickoff -- attempting to match an event
+        # months out just burns processing time comparing it against
+        # every currently-listed Betfair fixture, none of which can
+        # possibly be it. Skipping here does NOT affect cross-book
+        # detection above, which already ran and doesn't need
+        # Betfair at all.
+        #
+        # DAYS_AHEAD_LIMIT is a guess (21 days), not measured against
+        # real Betfair listing behavior per sport -- tune per-sport
+        # via SPORT_CONFIG[sport]["max_days_ahead"] once you've
+        # observed how far out markets actually open (e.g. by
+        # checking how many days ahead your genuinely-matched
+        # fixtures tend to be).
+        # ------------------------------------------
+
+        if start_time:
+            days_ahead = (
+                float(start_time) - datetime.now(timezone.utc).timestamp()
+            ) / 86400
+
+            max_days_ahead = sport_config.get("max_days_ahead", DEFAULT_MAX_DAYS_AHEAD)
+
+            if days_ahead > max_days_ahead:
+                if debug_matching:
+                    print(f"SKIP (too far ahead, {days_ahead:.0f}d): " f"{event_name}")
+                continue
 
         matched_event = MatcherService.find_matching_event(
             odds_event_name=event_name,
@@ -482,6 +613,7 @@ def scan_for_arbitrage(
                 f"Lay: {lay_odds}"
             )
 
+            
             if lay_odds is None:
                 continue
 
@@ -506,6 +638,9 @@ def scan_for_arbitrage(
             result["start_time"] = group.get("start_time")
             result["sport"] = sport
             result["league"] = group.get("league", "")
+
+            # Deep link returned by The Odds API.
+            result["bookmaker_link"] = back_info.get("link")
 
             if result["profit_percentage"] < min_profit_pct:
                 continue
